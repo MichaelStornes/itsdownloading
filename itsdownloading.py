@@ -11,7 +11,7 @@ import requests
 
 class Settings:
     def __init__(self):
-        self.school = 'ntnu'
+        self.school = 'nhh'
         self.base_url = 'https://{}.itslearning.com'.format(self.school)
         self.include_assignment_answers = False
         self.root_dir = os.path.abspath(os.path.join(os.path.curdir, 'Downloaded courses'))
@@ -53,9 +53,8 @@ def main():
 
 
 def console_settings_init():
-    if re.match('[hH].*', input('Choose ntnu or hist: ')):
-        settings.set_school_and_base_url('hist')
-    print('You chose ' + settings.school)
+    settings.set_school_and_base_url('nhh')
+    print('This is a version of "ItsDownloading" by SimenNJ, modified for use at NHH by Michael Stornes')
     if re.match('[yYjJ].*', input('Include assignment answers? y/n: ')):
         settings.include_assignment_answers = True
         print('Including assignment answers.')
@@ -71,85 +70,40 @@ def console_settings_init():
 
 
 def console_login():
-    import getpass
     logged_in = False
     while not logged_in:
+        print('Fill in your login information below. Your password WILL be visible when typed')
         username = input('Username: ')
-        print('No characters are shown while typing in a password in a terminal or cmd.')
-        print('Just type in the password and press enter like normal, the window is not frozen.')
-        password = getpass.getpass('Password: ')
+        password = input('Password: ')
         logged_in = attempt_login(username, password)
-        if not logged_in:
-            print('Wrong username or password.')
 
 
 def attempt_login(username: str, password: str) -> bool:
-    form = get_form_from_page(session.get('https://innsida.ntnu.no/lms-' + settings.school))
-    login_url = 'https://idp.feide.no/simplesaml/module.php/feide/login.php' + form.action
-    data = get_values_from_form(form)
-    data['feidename'] = username.lower()
-    data['password'] = password
-    confirm_login_page = session.post(login_url, data=data)
-    logged_in = confirm_login(confirm_login_page)
+    login_url = 'https://nhh.itslearning.com/Index.aspx'
+    page = requests.get(login_url)
+    tree = lxml.html.fromstring(page.content)
+    data = {
+        '__EVENTTARGET': 'ctl00$ContentPlaceHolder1$federatedLoginButtons$ctl00$ctl00',
+        '__EVENTARGUMENT': '',
+        '__VIEWSTATE': tree.xpath('//input[@name="__VIEWSTATE"]/@value')[0],
+        '__VIEWSTATEGENERATOR': '90059987',
+        '__EVENTVALIDATION': tree.xpath('//input[@name="__EVENTVALIDATION"]/@value')[0],
+        'ctl00$ContentPlaceHolder1$Username$input': username,
+        'ctl00$ContentPlaceHolder1$Password$input': password,
+        'ctl00$ContentPlaceHolder1$nativeLoginButton': 'Logg På',
+        'ctl00$language_internal$H': '0'
+    }
+    login = session.post(login_url, data=data)
+    logged_in = confirm_nhh_login(login)
     return logged_in
 
 
-def get_form_from_page(page: requests.Response) -> lxml.html.FormElement:
-    tree = lxml.html.fromstring(page.content)
-    form = tree.forms[0]
-    if form.xpath('fieldset/select[@name="org"]'):
-        page = session.get(page.url + '&org=ntnu.no')
-        return get_form_from_page(page)
-    return form
-
-
-def get_values_from_form(form: lxml.html.FormElement) -> dict:
-    return {i.xpath("@name")[0]: i.xpath("@value")[0] for i in form.xpath(".//input[@name]") if i.xpath("@value")}
-
-
-def confirm_login(confirm_login_page: requests.Response) -> bool:
-    form = get_form_from_page(confirm_login_page)
-    try:
-        session.post(form.action, get_values_from_form(form))
-    except requests.exceptions.MissingSchema:
-        return False
-    if settings.school == 'hist':
-        hist_extra_login(confirm_login_page)
-    return True
-
-
-def hist_extra_login(confirm_login_page: requests.Response):
-    confirm_login_page2 = post_form_from_page(confirm_login_page)
-    confirm_login_page3 = post_form_from_page(confirm_login_page2)
-    tree = lxml.html.fromstring(confirm_login_page3.content)
-    try:
-        data = {
-            '__EVENTTARGET': 'ctl00$ContentPlaceHolder1$federatedLoginButtons$ctl00$ctl00',
-            '__EVENTARGUMENT': '',
-            '__VIEWSTATE': tree.xpath('//input[@name="__VIEWSTATE"]/@value')[0],
-            '__VIEWSTATEGENERATOR': '90059987',
-            '__EVENTVALIDATION': tree.xpath('//input[@name="__EVENTVALIDATION"]/@value')[0],
-            'ctl00$ContentPlaceHolder1$Username$input': '',
-            'ctl00$ContentPlaceHolder1$Password$input': '',
-            'ctl00$ContentPlaceHolder1$showNativeLoginValueField': '',
-            'ctl00$language_internal$H': '0'
-        }
-        page = session.post('https://hist.itslearning.com/Index.aspx', data=data)
-        confirm_login_page4 = post_form_from_page(page)
-        post_form_from_page(confirm_login_page4)
-    except IndexError:
-        with open(os.path.join(settings.root_dir, 'login_error.html'), 'wb') as file:
-            file.write(confirm_login_page3.content)
-        print('Login process seems to have failed on the page saved as login_error.html')
-        print('\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n')
-        print(traceback.format_exc())
-        print('\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n')
-        print('Trying to continue anyway (if no courses are shown, the login failed)')
-
-
-def post_form_from_page(page: requests.Response) -> requests.Response:
-    form = get_form_from_page(page)
-    return session.post(form.action, get_values_from_form(form))
+def confirm_nhh_login(login: requests.Response):
+    success_url='https://nhh.itslearning.com/DashboardMenu.aspx?LocationType=Hierarchy'
+    if login.url == success_url:
+        return True
+    print('Username or password is not correct. Try again with your ItsLearning user')
+    return False
 
 
 def console_select_urls() -> list:
@@ -207,7 +161,8 @@ def download_course_or_project(url: str):
     folder_id = re.search('var contentAreaRootFolderId = \"item\" \+ ([0-9]+);',
                           tree.xpath('//aside/script')[0].text).groups()[0]
     title = tree.xpath('//h1[@class="treemenu-title"]/span/text()')[0]
-    directory = os.path.join(settings.root_dir, title)
+    clean_title = title.replace(": ", "-")
+    directory = os.path.join(settings.root_dir, clean_title)
     download_folder(directory, url, folder_id)
 
 
@@ -278,21 +233,13 @@ def download_from_essay_page(directory: str, link_url: str):
 
 
 def download_from_file_page(directory: str, link_url: str):
+    file_page = session.get(link_url)
     try:
-        file_page = session.get(link_url)
-        download_url = settings.base_url + lxml.html.fromstring(file_page.content).xpath(
-            '//a[@class="ccl-button ccl-button-color-green ccl-button-submit"]/@href'
-        )[0][2:]
-    except Exception:
-        print('failed to download the file from {} in {}'.format(link_url, directory))
-        file_path = os.path.join(directory, 'errors.txt')
-        print('saving error log to {}'.format(file_path))
-        with open(file_path, 'a') as file:
-            file.write('\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n')
-            file.write('start error from {} in {} at {}\r\n'.format(link_url, directory, datetime.datetime.now()))
-            file.write(traceback.format_exc())
-            file.write('\r\nend error from {} in {} at {}'.format(link_url, directory, datetime.datetime.now()))
-            file.write('\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n')
+        download_url = settings.base_url + \
+                       lxml.html.fromstring(file_page.content).xpath(
+                           '//a[@class="ccl-button ccl-button-color-green ccl-button-submit"]/@href')[0][2:]
+    except XMLSyntaxError:
+        print("itslearning returned invalid XML. Sorry about that :/ Skipping!")
         return
     download_file(directory, download_url)
 
@@ -300,30 +247,20 @@ def download_from_file_page(directory: str, link_url: str):
 def download_file(directory: str, download_url: str):
     try:
         download = session.get(download_url, stream=True)
-        try:
-            content_disposition = download.headers['content-disposition']
-            raw_file_name = re.findall('filename="(.+)"', content_disposition)[0]
-        except Exception:
-            print('The file from {} in {} does not seem to have a name. Saving as unnamed{}.txt'.format(download_url,
-                                                                                                        directory,
-                                                                                                        settings.unnamed_counter))
-            raw_file_name = 'unnamed{}.txt'.format(settings.unnamed_count)
-        filename = raw_file_name.encode('iso-8859-1').decode()
-        filepath = os.path.join(directory, filename)
-        with open(filepath, 'wb') as downloaded_file:
-            for chunk in download:
-                downloaded_file.write(chunk)
-        print('Downloaded: ', filepath)
-    except Exception:
-        print('failed to download the file from {} in {}'.format(download_url, directory))
-        file_path = os.path.join(directory, 'errors.txt')
-        print('saving error log to {}'.format(file_path))
-        with open(file_path, 'a') as file:
-            file.write('\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n')
-            file.write('start error from {} in {} at {}\r\n'.format(download_url, directory, datetime.datetime.now()))
-            file.write(traceback.format_exc())
-            file.write('\r\nend error from {} in {} at {}'.format(download_url, directory, datetime.datetime.now()))
-            file.write('\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n')
+    except MissingSchema:
+        print('error occurred during download; continuing past it')
+        return
+    raw_file_name = re.findall('filename="(.+)"', download.headers['content-disposition'])
+    if raw_file_name:
+        raw_file_name = raw_file_name[0]
+    else:
+        return
+    filename = raw_file_name.encode('iso-8859-1').decode()
+    filepath = os.path.join(directory, filename)
+    with open(filepath, 'wb') as downloaded_file:
+        for chunk in download:
+            downloaded_file.write(chunk)
+    print('Downloaded: ', filepath)
 
 
 if __name__ == '__main__':
